@@ -12,6 +12,13 @@ ABSOLUTE RULES
 5. Confidence: "high" = stated on the provider's own current site; "medium" = stated by one reputable third party; "low" = single dated or indirect source.
 6. Facts useful to corporate group planners matter most: capacities, group-size ranges, private-event availability, buyout options, formats (seated/reception/theater), neighborhoods, seasonal constraints, booking constraints, duration, accessibility, transportation/logistics notes, distinctive attributes. Public price signals are welcome when explicitly published; never guess pricing.
 7. 6 searches maximum. Be efficient: start with the provider's own site.
+8. PLANNER PRIORITY CHECK. Before you finish, re-read the sources you retrieved and explicitly check each of these four, which corporate group planners need most: group_size, capacity, pricing_signal, and private-event availability. If a value is published anywhere in the sources you retrieved, capture it as a facet — do not skip it because it was mentioned in passing. If it is genuinely not published, it stays absent. This check does not relax rule 2: never estimate, never infer, never fill these in from general knowledge.
+9. Every entry in "sources" must be cited by at least one service or facet in your final JSON. Drop any source that nothing ends up citing.
+
+FACET TYPE NOTES
+- "identity": basic provider identity — street address, founding year, official name variants. Identity facts go here and NEVER in "unique_attribute".
+- "related_property": a fact about a sister, affiliated, or partner venue or property that this provider operates or offers. The "value" MUST name that related property explicitly, so it can never be mistaken for the researched provider itself.
+- "unique_attribute": genuinely distinguishing characteristics of THIS provider. Not identity facts, not facts about a related property.
 
 OUTPUT SCHEMA (return exactly this shape):
 {
@@ -32,7 +39,7 @@ OUTPUT SCHEMA (return exactly this shape):
   ],
   "facets": [
     {
-      "facet_type": "service|capacity|group_size|venue_format|neighborhood|seasonal|pricing_signal|unique_attribute|booking_constraint|amenity|accessibility|duration|other",
+      "facet_type": "service|capacity|group_size|venue_format|neighborhood|seasonal|pricing_signal|unique_attribute|booking_constraint|amenity|accessibility|duration|identity|related_property|other",
       "label": "short_snake_case_label",
       "value": "human-readable fact as stated",
       "value_numeric": 250,

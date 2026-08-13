@@ -13,6 +13,10 @@ import { EXTRACTION_SYSTEM_PROMPT } from './extraction-prompt.js';
 
 const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
 const MAX_SEARCHES = 6;
+// A full provider profile (services + facets + sources) runs 2.5k-4k output
+// tokens, and richer providers exceed that. At 4000 the JSON was truncated
+// mid-array and failed to parse. Keep well clear of the ceiling.
+const MAX_OUTPUT_TOKENS = 16000;
 
 const need = (k) => {
   if (!process.env[k]) { console.error(`Missing env var ${k} — see .env.example`); process.exit(1); }
@@ -56,10 +60,11 @@ async function researchProvider(provider) {
   const { data: run } = await supabase.from('research_runs')
     .insert({ provider_id: provider.id, model: MODEL }).select().single();
 
+  let usage = {}, searchCount = 0;
   try {
     const response = await anthropic.messages.create({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: MAX_OUTPUT_TOKENS,
       system: [{ type: 'text', text: EXTRACTION_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: MAX_SEARCHES }],
       messages: [{
@@ -68,8 +73,15 @@ async function researchProvider(provider) {
       }]
     });
 
-    const usage = response.usage || {};
-    const searchCount = (response.content || []).filter((b) => b.type === 'server_tool_use').length;
+    usage = response.usage || {};
+    searchCount = (response.content || []).filter((b) => b.type === 'server_tool_use').length;
+
+    // Truncation surfaces downstream as an opaque "Expected ',' or ']'" parse
+    // error. Name the real cause instead.
+    if (response.stop_reason === 'max_tokens') {
+      throw new Error(`Response truncated at max_tokens (${MAX_OUTPUT_TOKENS}) — raise MAX_OUTPUT_TOKENS`);
+    }
+
     const text = (response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const jsonStr = text.replace(/```json|```/g, '').trim();
     const start = jsonStr.indexOf('{');
@@ -125,7 +137,8 @@ async function researchProvider(provider) {
   } catch (err) {
     console.error(`  ✗ ${err.message}`);
     await supabase.from('providers').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', provider.id);
-    await finishRun(run.id, 'failed', 0, {}, err.message);
+    // keep whatever usage we did incur — a failed run still costs money
+    await finishRun(run.id, 'failed', searchCount, usage, err.message);
   }
 }
 

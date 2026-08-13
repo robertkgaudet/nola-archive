@@ -50,10 +50,13 @@ create table if not exists facets (
   id uuid primary key default uuid_generate_v4(),
   provider_id uuid not null references providers(id) on delete cascade,
   service_id uuid references services(id) on delete set null,
-  facet_type text not null check (facet_type in (
+  -- keep in sync with sql/migrations/001-facet-types.sql
+  facet_type text not null constraint facets_facet_type_check check (facet_type in (
     'service','capacity','group_size','venue_format','neighborhood',
     'seasonal','pricing_signal','unique_attribute','booking_constraint',
-    'amenity','accessibility','duration','other'
+    'amenity','accessibility','duration',
+    'identity','related_property',
+    'other'
   )),
   label text not null,            -- short machine-friendly label, e.g. 'max_seated_capacity'
   value text not null,            -- human-readable fact, e.g. 'Seats up to 250 for private dinners'
