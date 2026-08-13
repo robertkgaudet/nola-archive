@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.local
+# confidential shield blocklist must never enter the repo
+blocklist*.txt
+*blocklist*
+vendor*.csv

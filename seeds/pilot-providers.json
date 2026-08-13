@@ -1,0 +1,15 @@
+{
+  "_note": "Pilot seeds chosen for public prominence across categories. Selection made from general public knowledge of New Orleans, NOT from any client vendor file. The research agent verifies each from public sources; anything it cannot source stays null.",
+  "providers": [
+    { "name": "Preservation Hall", "city": "New Orleans", "categories": ["entertainment", "venue"] },
+    { "name": "Steamboat Natchez (New Orleans Steamboat Company)", "city": "New Orleans", "categories": ["venue", "activity", "cruise"] },
+    { "name": "Mardi Gras World", "city": "New Orleans", "categories": ["venue", "attraction"] },
+    { "name": "The National WWII Museum", "city": "New Orleans", "categories": ["venue", "attraction"] },
+    { "name": "New Orleans School of Cooking", "city": "New Orleans", "categories": ["activity", "team_building", "culinary"] },
+    { "name": "Cajun Encounters Tour Company", "city": "Slidell", "categories": ["activity", "swamp_tour"] },
+    { "name": "The Court of Two Sisters", "city": "New Orleans", "categories": ["restaurant", "group_dining"] },
+    { "name": "Kinfolk Brass Band", "city": "New Orleans", "categories": ["entertainment", "second_line"] },
+    { "name": "Gray Line New Orleans", "city": "New Orleans", "categories": ["transportation", "tours"] },
+    { "name": "Perrier Party Rentals", "city": "New Orleans", "categories": ["decor", "event_rentals"] }
+  ]
+}

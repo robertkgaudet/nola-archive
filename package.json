@@ -1,0 +1,17 @@
+{
+  "name": "nola-archive",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Trustlight-owned New Orleans experience archive — Stage 1 pilot (public-source research agent)",
+  "scripts": {
+    "research": "node src/research-agent.js",
+    "research:one": "node src/research-agent.js --limit 1",
+    "shield": "node src/shield-gate.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.57.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.0"
+  }
+}
