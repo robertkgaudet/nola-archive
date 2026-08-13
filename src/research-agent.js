@@ -28,6 +28,27 @@ const supabase = createClient(need('SUPABASE_URL'), need('SUPABASE_SERVICE_ROLE_
 
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
 
+// Extract the FIRST complete, balanced JSON object. The model occasionally
+// appends prose after the JSON — most often on short "not found" replies,
+// where it wants to justify itself — and a naive indexOf('{')..lastIndexOf('}')
+// slice swallows that trailing text and fails to parse. Brace-matching is
+// string- and escape-aware so braces inside values don't throw off the depth.
+function extractJsonObject(s) {
+  const start = s.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { if (inStr) esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return s.slice(start, i + 1);
+  }
+  return null; // never balanced — output was truncated
+}
+
 // Supabase error objects stringify to `{ message: '' }` on transport/permission
 // failures, which tells you nothing. Surface code/details/hint instead.
 const fail = (context, error) => {
@@ -84,10 +105,9 @@ async function researchProvider(provider) {
 
     const text = (response.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     const jsonStr = text.replace(/```json|```/g, '').trim();
-    const start = jsonStr.indexOf('{');
-    const end = jsonStr.lastIndexOf('}');
-    if (start === -1 || end === -1) throw new Error('No JSON object in model output');
-    const data = JSON.parse(jsonStr.slice(start, end + 1));
+    const slice = extractJsonObject(jsonStr);
+    if (!slice) throw new Error('No complete JSON object in model output');
+    const data = JSON.parse(slice);
 
     if (!data.provider?.found) {
       await supabase.from('providers').update({ status: 'not_found', updated_at: new Date().toISOString() }).eq('id', provider.id);
@@ -152,18 +172,116 @@ async function finishRun(runId, status, searches, usage, error = null) {
   }).eq('id', runId);
 }
 
+// ---------- stratified sampling ----------
+// `order('created_at')` returns providers in insertion order, which for a
+// discovery-seeded universe means whole categories arrive in blocks — the
+// first 25 would be almost entirely venues. For calibration we want a spread
+// across categories AND across prominence, so: allocate per-category quotas by
+// largest-remainder, then pick randomly inside each category.
+//
+// Category comes from discovery_runs.category (the controlled matrix axis)
+// via providers.discovered_from, not from providers.categories, which holds
+// the model's free-text guess and is not consistent enough to stratify on.
+async function fetchAllPending() {
+  const out = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await supabase.from('providers')
+      .select('*').eq('status', 'pending').order('created_at').range(from, from + size - 1);
+    if (error) fail('Fetching pending providers failed', error);
+    out.push(...data);
+    if (data.length < size) break;
+  }
+  return out;
+}
+
+async function categoryByQuery() {
+  const map = {};
+  const { data, error } = await supabase.from('discovery_runs').select('query, category');
+  if (error) return map; // table may not exist yet; fall back to 'unknown'
+  for (const r of data) map[r.query] = r.category;
+  return map;
+}
+
+function allocate(groups, n) {
+  const total = Object.values(groups).reduce((a, g) => a + g.length, 0);
+  const exact = {}, quota = {};
+  for (const [c, g] of Object.entries(groups)) {
+    exact[c] = (g.length / total) * n;
+    quota[c] = Math.min(Math.floor(exact[c]), g.length);
+  }
+  // hand out the remainder by largest fractional part
+  let left = n - Object.values(quota).reduce((a, v) => a + v, 0);
+  const order = Object.keys(groups).sort((a, b) => (exact[b] % 1) - (exact[a] % 1));
+  while (left > 0) {
+    const before = left;
+    for (const c of order) {
+      if (left === 0) break;
+      if (quota[c] < groups[c].length) { quota[c]++; left--; }
+    }
+    if (left === before) break; // every category exhausted
+  }
+  // make sure no represented category is shut out entirely
+  for (const c of Object.keys(groups)) {
+    if (quota[c] > 0) continue;
+    const donor = Object.keys(quota).sort((a, b) => quota[b] - quota[a])[0];
+    if (quota[donor] > 1) { quota[donor]--; quota[c] = 1; }
+  }
+  return quota;
+}
+
+async function stratifiedSample(n) {
+  const pending = await fetchAllPending();
+  const catOf = await categoryByQuery();
+
+  const groups = {};
+  for (const p of pending) {
+    const c = p.discovered_from === 'pilot_seed'
+      ? 'pilot_seed'
+      : (catOf[p.discovered_from] || 'unknown');
+    (groups[c] ||= []).push(p);
+  }
+
+  const quota = allocate(groups, Math.min(n, pending.length));
+
+  const picked = [];
+  for (const [c, g] of Object.entries(groups)) {
+    const shuffled = [...g].sort(() => Math.random() - 0.5); // prominence mix, not insertion order
+    picked.push(...shuffled.slice(0, quota[c]));
+  }
+
+  console.log(`Stratified sample of ${picked.length} from ${pending.length} pending:`);
+  for (const [c, g] of Object.entries(groups).sort((a, b) => b[1].length - a[1].length)) {
+    console.log(`  ${String(quota[c]).padStart(2)} of ${String(g.length).padStart(3)}  ${c}`);
+  }
+  return picked;
+}
+
 // ---------- main ----------
-const limitArg = process.argv.indexOf('--limit');
-const limit = limitArg > -1 ? parseInt(process.argv[limitArg + 1], 10) : 1000;
+const argVal = (flag) => { const i = process.argv.indexOf(flag); return i > -1 ? process.argv[i + 1] : null; };
+const limit = argVal('--limit') ? parseInt(argVal('--limit'), 10) : 1000;
+const sample = argVal('--sample') ? parseInt(argVal('--sample'), 10) : null;
 
 await seedIfEmpty();
 // re-queue anything stuck mid-run from a previous interrupted session
 await supabase.from('providers').update({ status: 'pending' }).eq('status', 'researching');
 
-const { data: pending, error } = await supabase.from('providers')
-  .select('*').eq('status', 'pending').order('created_at').limit(limit);
-if (error) fail('Fetching pending providers failed', error);
-console.log(`${pending.length} provider(s) pending.`);
+let pending;
+if (sample) {
+  pending = await stratifiedSample(sample);
+  // --plan: show the draw and exit without spending anything
+  if (process.argv.includes('--plan')) {
+    console.log('\n--plan — nothing researched. Selected:');
+    for (const p of pending) console.log(`  [${p.city}] ${p.name}`);
+    process.exit(0);
+  }
+} else {
+  const { data, error } = await supabase.from('providers')
+    .select('*').eq('status', 'pending').order('created_at').limit(limit);
+  if (error) fail('Fetching pending providers failed', error);
+  pending = data;
+  console.log(`${pending.length} provider(s) pending.`);
+}
 
 for (const p of pending) {
   await researchProvider(p);
