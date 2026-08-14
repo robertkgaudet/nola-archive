@@ -11,7 +11,9 @@
     "shield": "node src/shield-gate.js",
     "cluster": "node src/cluster-experiences.js",
     "wp:check": "node src/wp-publish.js --check",
-    "wp:test": "node src/wp-publish.js --test"
+    "wp:test": "node src/wp-publish.js --test",
+    "pages:sample": "node src/generate-pages.js --sample",
+    "pages": "node src/generate-pages.js --all"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
