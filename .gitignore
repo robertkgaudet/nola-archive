@@ -5,3 +5,6 @@ node_modules/
 blocklist*.txt
 *blocklist*
 vendor*.csv
+
+# run logs stay local — they hold not_found reasons not persisted to the DB
+*.log
