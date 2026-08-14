@@ -8,7 +8,8 @@
     "research": "node src/research-agent.js",
     "research:one": "node src/research-agent.js --limit 1",
     "discover": "node src/discovery-seeder.js",
-    "shield": "node src/shield-gate.js"
+    "shield": "node src/shield-gate.js",
+    "cluster": "node src/cluster-experiences.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",

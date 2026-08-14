@@ -8,3 +8,6 @@ vendor*.csv
 
 # run logs stay local — they hold not_found reasons not persisted to the DB
 *.log
+
+# stage 3a intermediate artifacts
+.stage3-cache/
