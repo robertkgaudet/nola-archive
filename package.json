@@ -9,7 +9,9 @@
     "research:one": "node src/research-agent.js --limit 1",
     "discover": "node src/discovery-seeder.js",
     "shield": "node src/shield-gate.js",
-    "cluster": "node src/cluster-experiences.js"
+    "cluster": "node src/cluster-experiences.js",
+    "wp:check": "node src/wp-publish.js --check",
+    "wp:test": "node src/wp-publish.js --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",

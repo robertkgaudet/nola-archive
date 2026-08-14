@@ -1,135 +1,181 @@
-// NOLA Archive — WordPress publishing client (Stage 5).
+// NOLA Archive — WordPress publisher (noladmc.com)
 //
-// Creates posts on noladmc.com through the WordPress REST API using an
+// Creates posts on the live WordPress site via the REST API using an
 // application password over HTTPS Basic auth.
 //
-// CREDENTIAL HANDLING:
-// WP_USER and WP_APP_PASSWORD are read from .env at runtime and are NEVER
-// logged, printed, or written anywhere. .env is gitignored. The Authorization
-// header is built inside request() and never leaves this file. If you add
-// debug logging here, do NOT log headers.
-//
-// Application passwords are issued in wp-admin → Users → Profile → Application
-// Passwords. They carry the full capabilities of the user they belong to, so
-// treat one exactly like the account password.
+// The application password lives ONLY in .env (WP_APP_PASSWORD) and is never
+// logged, printed, or committed. Errors print status codes and WordPress error
+// codes — never the credential.
 //
 // Usage:
-//   import { createPost, getCategories, whoAmI } from './wp-publish.js';
-//   const post = await createPost({ title, slug, html, status: 'private' });
+//   node src/wp-publish.js --check          verify auth, print the account
+//   node src/wp-publish.js --test           create the private plumbing-test post
+//   node src/wp-publish.js --delete <id>    move a post to trash
+//   node src/wp-publish.js --delete <id> --force   delete permanently
 
 import 'dotenv/config';
 
 const need = (k) => {
-  if (!process.env[k]) { console.error(`Missing env var ${k} — see .env`); process.exit(1); }
+  if (!process.env[k]) { console.error(`Missing env var ${k} — add it to .env`); process.exit(1); }
   return process.env[k];
 };
 
-// Trailing slashes here produce '//wp-json' paths that some hosts 301 into a
-// GET, silently turning a POST into a no-op. Strip it once, up front.
 const BASE = need('WP_BASE_URL').replace(/\/+$/, '');
-const API = `${BASE}/wp-json/wp/v2`;
+const USER = need('WP_USER');
+const PASS = need('WP_APP_PASSWORD'); // spaces are part of the password — do not strip
 
-// WP prints application passwords in space-separated groups purely for
-// legibility. The spaces are part of the password as far as Basic auth is
-// concerned, so they are preserved verbatim — do not strip them.
-function authHeader() {
-  const user = need('WP_USER');
-  const pass = need('WP_APP_PASSWORD');
-  return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-}
+// WordPress application passwords are shown as 6 space-separated groups of 4.
+// The spaces are significant; WP strips them itself on comparison, but sending
+// the value verbatim is what the docs specify.
+const authHeader = () => 'Basic ' + Buffer.from(`${USER}:${PASS}`).toString('base64');
 
-async function request(path, { method = 'GET', body } = {}) {
-  const res = await fetch(`${API}${path}`, {
+async function wp(path, { method = 'GET', body } = {}) {
+  const res = await fetch(`${BASE}/wp-json${path}`, {
     method,
     headers: {
       Authorization: authHeader(),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {})
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    body: body ? JSON.stringify(body) : undefined
   });
 
   const text = await res.text();
-  let json;
-  try { json = text ? JSON.parse(text) : null; }
-  catch { json = null; }
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* non-JSON error page */ }
 
   if (!res.ok) {
-    // WP error bodies look like { code, message, data: { status } }. Surface
-    // the message; never echo the request headers.
-    const detail = json?.message ? `${json.code}: ${json.message}` : text.slice(0, 300);
-    throw new Error(`WP ${method} ${path} → HTTP ${res.status}. ${detail}`);
+    const code = json?.code || '(no code)';
+    const msg = json?.message || text.slice(0, 200);
+
+    // The signature of a stripped Authorization header: WordPress reports
+    // "not logged in" rather than rejecting the credential. If the header were
+    // reaching PHP, a bad password would come back as `incorrect_password`.
+    if (res.status === 401 && code === 'rest_not_logged_in') {
+      throw new Error(
+        `401 ${code}: ${msg}\n\n` +
+        `  WordPress did not see an Authorization header at all — this is a server\n` +
+        `  transport problem, not a wrong password. The origin is not passing\n` +
+        `  HTTP_AUTHORIZATION through to PHP (common on Apache/LiteSpeed + CGI/FastCGI).\n` +
+        `  Fix in the site's root .htaccess:\n\n` +
+        `    <IfModule mod_rewrite.c>\n` +
+        `    RewriteEngine On\n` +
+        `    RewriteCond %{HTTP:Authorization} ^(.*)\n` +
+        `    RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]\n` +
+        `    </IfModule>\n`
+      );
+    }
+    throw new Error(`${res.status} ${code}: ${msg}`);
   }
   return json;
 }
 
-/** Confirm the credential works and report which account it belongs to. */
+/** Verify the credential works. Returns the authenticated user. */
 export async function whoAmI() {
-  return request('/users/me?context=edit');
-}
-
-/** All categories, id + name + slug + post count. */
-export async function getCategories() {
-  return request('/categories?per_page=100&_fields=id,name,slug,count,parent');
+  return wp('/wp/v2/users/me?context=edit');
 }
 
 /**
  * Create a post.
- *
- * @param {object}  page
- * @param {string}  page.title            post title (required)
- * @param {string}  page.html             post body as HTML (required)
- * @param {string} [page.slug]            URL slug; WP derives one from the title if omitted
- * @param {string} [page.status='draft']  'private' | 'draft' | 'publish' | 'future' | 'pending'
- * @param {string} [page.date]            ISO 8601; required by WP when status='future'
- * @param {number} [page.categoryId]      category to file under; omit for the site default
- * @param {string} [page.metaDescription] excerpt, which most SEO plugins fall back to
- *
- * NO-FALLBACKS on status: an unrecognized value is rejected here rather than
- * being quietly coerced, because the failure mode is publishing something
- * publicly that was meant to be private.
+ * @param {object} o
+ * @param {string} o.title
+ * @param {string} [o.slug]
+ * @param {string} o.html               post_content
+ * @param {string} [o.status]           'private' | 'draft' | 'future' | 'publish'
+ * @param {string} [o.date]             ISO 8601; required when status is 'future'
+ * @param {number} [o.categoryId]       omit to use the site default category
+ * @param {string} [o.metaDescription]  SEOPress meta description
  */
 export async function createPost({
-  title,
-  slug,
-  html,
-  status = 'draft',
-  date,
-  categoryId,
-  metaDescription,
-} = {}) {
-  if (!title || typeof title !== 'string') throw new Error('createPost: title is required');
-  if (!html || typeof html !== 'string') throw new Error('createPost: html is required');
+  title, slug, html, status = 'draft', date, categoryId, metaDescription
+}) {
+  if (!title) throw new Error('createPost: title is required');
+  if (!html) throw new Error('createPost: html is required');
 
-  const ALLOWED = ['draft', 'private', 'publish', 'pending', 'future'];
-  if (!ALLOWED.includes(status)) {
-    throw new Error(`createPost: status must be one of ${ALLOWED.join(', ')} (got '${status}')`);
+  const body = { title, content: html, status };
+  if (slug) body.slug = slug;
+  if (date) body.date = date;
+  if (categoryId) body.categories = [categoryId];
+
+  // SEOPress stores its description in post meta. Whether REST accepts it
+  // depends on the field being registered with show_in_rest; if it isn't, the
+  // post still creates and we report that the description didn't stick rather
+  // than failing the publish.
+  if (metaDescription) body.meta = { _seopress_titles_desc: metaDescription };
+
+  let post;
+  try {
+    post = await wp('/wp/v2/posts', { method: 'POST', body });
+  } catch (e) {
+    if (metaDescription && /meta|_seopress/i.test(e.message)) {
+      console.warn('  note: meta description rejected by REST; retrying without it');
+      delete body.meta;
+      post = await wp('/wp/v2/posts', { method: 'POST', body });
+      post._metaDescriptionApplied = false;
+    } else {
+      throw e;
+    }
   }
-  if (status === 'future' && !date) {
-    throw new Error("createPost: status 'future' requires a date");
-  }
-
-  const body = {
-    title,
-    content: html,
-    status,
-    ...(slug ? { slug } : {}),
-    ...(date ? { date } : {}),
-    ...(categoryId ? { categories: [categoryId] } : {}),
-    ...(metaDescription ? { excerpt: metaDescription } : {}),
-  };
-
-  return request('/posts', { method: 'POST', body });
+  return post;
 }
 
-/** Fetch a single post (context=edit so private posts are visible). */
-export async function getPost(id) {
-  return request(`/posts/${id}?context=edit`);
-}
-
-/**
- * Delete a post. force=false sends it to trash (recoverable from wp-admin);
- * force=true removes it permanently.
- */
+/** Trash (default) or permanently delete a post. */
 export async function deletePost(id, { force = false } = {}) {
-  return request(`/posts/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' });
+  return wp(`/wp/v2/posts/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' });
+}
+
+// ---------- the plumbing-test post ----------
+const TEST_TITLE = 'TEST — NOLA DMC Answer Library plumbing check (safe to delete)';
+const TEST_HTML = `<h2>Plumbing check — this is a test page</h2>
+
+<p>This page exists only to confirm that the NOLA DMC Answer Library pipeline can create a correctly formatted post on this site. It contains no real content and is safe to delete. Placeholder copy follows so the theme's typography, spacing, and content width can be checked against a realistic block of text rather than a single line.</p>
+
+<p>A second paragraph, so paragraph spacing and line height are visible. If this renders with the same margins and measure as a normal blog post, the post format is correct and the pipeline is writing into the right field. If the text runs full-bleed or the heading above is unstyled, the theme is treating this differently from an editor-authored post and that needs looking at before anything real is published.</p>
+
+<h3>Does this page prove anything about scheduling or public visibility?</h3>
+
+<p>No. This post was created with status <code>private</code>, which means it is visible only to logged-in administrators and never to the public. Nothing has been scheduled and nothing has been published. The next step is a decision, not an automatic rollout.</p>
+
+<p>Ready to talk about your programme? <a href="https://noladmc.com/request-for-a-proposal/">Request a Proposal</a>.</p>`;
+
+// ---------- CLI ----------
+const arg = (f) => { const i = process.argv.indexOf(f); return i > -1 ? process.argv[i + 1] : null; };
+
+if (process.argv.includes('--check')) {
+  const me = await whoAmI();
+  console.log(`Authenticated as ${me.name} (id ${me.id}, roles: ${(me.roles || []).join(', ')})`);
+  console.log(`  publish_posts: ${!!me.capabilities?.publish_posts}  delete_posts: ${!!me.capabilities?.delete_posts}`);
+}
+
+if (process.argv.includes('--test')) {
+  const me = await whoAmI(); // fail fast with the useful auth diagnostic
+  console.log(`Authenticated as ${me.name} (id ${me.id})`);
+
+  const categoryId = arg('--category') ? Number(arg('--category')) : undefined;
+  const post = await createPost({
+    title: TEST_TITLE,
+    slug: 'test-answer-library-plumbing-check',
+    html: TEST_HTML,
+    status: 'private',
+    categoryId,
+    metaDescription: 'Internal plumbing test for the NOLA DMC Answer Library. Not public content.'
+  });
+
+  console.log('\n=== TEST POST CREATED ===');
+  console.log(`  id      : ${post.id}`);
+  console.log(`  status  : ${post.status}`);
+  console.log(`  link    : ${post.link}`);
+  console.log(`  edit    : ${BASE}/wp-admin/post.php?post=${post.id}&action=edit`);
+  console.log(`  category: ${JSON.stringify(post.categories)}`);
+  console.log(`\n  delete when done:`);
+  console.log(`    node src/wp-publish.js --delete ${post.id}`);
+}
+
+if (process.argv.includes('--delete')) {
+  const id = arg('--delete');
+  if (!id) { console.error('--delete requires a post id'); process.exit(1); }
+  const force = process.argv.includes('--force');
+  const r = await deletePost(id, { force });
+  console.log(force
+    ? `Post ${id} permanently deleted.`
+    : `Post ${id} moved to trash (status: ${r?.post?.status || r?.status || 'trash'}). Add --force to delete permanently.`);
 }
