@@ -33,7 +33,11 @@ async function wp(path, { method = 'GET', body } = {}) {
   const res = await fetch(`${BASE}/wp-json${path}`, {
     method,
     headers: {
+      // Some servers strip `Authorization` specifically while passing custom
+      // headers through untouched. The companion plugin reads either, so we
+      // send both and whichever survives is used.
       Authorization: authHeader(),
+      'X-Authorization': authHeader(),
       ...(body ? { 'Content-Type': 'application/json' } : {})
     },
     body: body ? JSON.stringify(body) : undefined
