@@ -288,6 +288,39 @@ for (const p of pending) {
   await new Promise((r) => setTimeout(r, 1500)); // gentle pacing
 }
 
+// ---------- convergence check ----------
+// Discovery dedupes on the SEEDED name, but research overwrites `name` with
+// the confirmed name — so two rows can converge on one business only after
+// they have both been researched. Catch it here, at run time, rather than at
+// browse time.
+{
+  const norm = (u) => (u || '').toLowerCase().trim()
+    .replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  const live = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('providers')
+      .select('name, slug, website, status').range(from, from + 999);
+    if (error) break;
+    live.push(...data.filter((p) => p.status !== 'merged'));
+    if (data.length < 1000) break;
+  }
+  const groups = new Map();
+  for (const p of live) {
+    const key = `${p.name.toLowerCase().trim()}::${norm(p.website)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const collided = [...groups.values()].filter((g) => g.length > 1);
+  if (collided.length) {
+    console.warn(`\n⚠  WARNING: ${collided.length} confirmed_name + website collision(s) — these are the same business under multiple rows:`);
+    for (const g of collided) {
+      console.warn(`   "${g[0].name}" (${g[0].website || 'no site'})`);
+      for (const p of g) console.warn(`      · ${p.slug}`);
+    }
+    console.warn(`   Resolve with: node src/dedup-merge.js --dry-run\n`);
+  }
+}
+
 const { data: runs } = await supabase.from('research_runs').select('input_tokens,output_tokens,cache_read_tokens,searches_used');
 const t = (runs || []).reduce((a, r) => ({
   in: a.in + r.input_tokens, out: a.out + r.output_tokens,

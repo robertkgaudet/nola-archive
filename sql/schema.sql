@@ -17,8 +17,11 @@ create table if not exists providers (
   city text default 'New Orleans',
   region text default 'Greater New Orleans',
   categories text[] default '{}',
+  -- keep in sync with sql/migrations/004-merged-status.sql
   status text not null default 'pending'
-    check (status in ('pending','researching','complete','failed','not_found')),
+    constraint providers_status_check
+    check (status in ('pending','researching','complete','failed','not_found','merged')),
+  merged_into uuid references providers(id) on delete set null,  -- set when status = 'merged'
   discovered_from text,           -- how this provider entered the universe (seed, directory name, etc.)
   created_at timestamptz default now(),
   updated_at timestamptz default now()
