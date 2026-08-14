@@ -94,6 +94,25 @@ Open this folder in VS Code and drive it with Claude Code. Useful first asks:
 - "Build the discovery seeder: enumerate New Orleans event providers from public
   directories into the providers table with discovered_from set."
 
+## Browsing the archive
+
+The read-only UI lives in a separate repo, `nola-archive-web`
+(https://github.com/robertkgaudet/nola-archive-web), deployed to Cloudflare
+Pages. It reads via the **anon/publishable** key under row-level security — the
+service-role key never leaves this repo.
+
+```bash
+cd ../nola-archive-web
+npm install
+cp .env.example .env    # add SUPABASE URL + anon key
+npm run dev             # http://localhost:5173
+npm run deploy          # build + push to Cloudflare Pages
+```
+
+Read access requires `sql/anon-read-policies.sql` (in that repo) to have been
+run in the Supabase SQL editor. Both a GRANT and an RLS policy are needed: a
+missing grant errors with `42501`, a missing policy silently returns zero rows.
+
 ## Roadmap (next stages)
 
 1. **Discovery seeder** — expand from 10 seeds to the full public universe
