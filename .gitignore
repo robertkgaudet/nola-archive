@@ -11,3 +11,4 @@ vendor*.csv
 
 # stage 3a intermediate artifacts
 .stage3-cache/
+.stage3b-cache/
