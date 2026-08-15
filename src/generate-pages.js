@@ -81,8 +81,11 @@ ABSOLUTE RULES
 2. NEVER NAME A BUSINESS, VENUE, RESTAURANT, HOTEL, BAND, OPERATOR, OR VENDOR. Not one, ever — not even as an example, and not even if a name appears inside an evidence value. Write about what the market offers, not who offers it. Proper nouns for neighbourhoods and public landmarks (French Quarter, Warehouse District, Mississippi River, Bourbon Street) are fine.
 3. Facts marked confidence "low" MUST NOT be used at all.
 4. Use aggregate counts ONLY when they match the member_count given in the payload. Do not invent "dozens of" or "more than 30" if the payload says 19.
-5. Every substantive claim in the page must appear in claim_map, mapped to the facet ids that support it. If you cannot cite it, do not write it.
+5. Every substantive claim in the page must appear in claim_map, mapped to the ids that support it. If you cannot cite it, do not write it. Two kinds of id are valid:
+   - a facet id from the evidence list, e.g. "e12"
+   - a payload statistic: "stat:member_count" for the count of businesses, "stat:group_size_range" for the group-size range. Use these for aggregate counts — never invent an id, and never leave an aggregate claim uncited.
 6. End body_md with the exact token {{CTA_RFP}} on its own final line. Write no call-to-action sentence of your own around it.
+7. FIRST-PERSON DISCIPLINE. You may say "we" only about work a destination management company categorically does — managing permits, booking, coordinating, producing, sourcing, handling logistics, matching a group to a venue. You may NOT claim a track record, a relationship, a portfolio, or a count that the archive cannot evidence. Never write "the 19 producers we work with", "we plan events across 20 properties", "venues we work with", or anything implying prior engagements. Frame every capability count and every piece of inventory as the MARKET: "New Orleans has 19 specialist producers", "more than 20 properties in this market offer...", "the market supports groups up to 350". Warmth and the emotional opening stay exactly as they are — only unverifiable business-history claims change. Every number must trace to the payload.
 
 VOICE — this is half the job
 The page must sound like it belongs on noladmc.com, not like a directory listing or a spec sheet. Her voice: warm, confident, second person, locally rooted, emotionally intelligent. She writes about experiences people "feel, remember, and talk about" — about connecting people "to each other, to your brand, and to New Orleans in a way that actually means something." She promises strategy plus authentic New Orleans culture plus flawless execution. She uses em-dashes and speaks directly to the planner.
@@ -100,6 +103,9 @@ WRITING GUIDANCE
 - related_slugs: 2-3 slugs from the sibling list provided.
 - meta_description: max 155 characters, natural, includes the core answer.
 
+JSON SAFETY
+Your entire reply is parsed as JSON. Inside any string value, never use a raw double quote — not for emphasis, not around a term, not for a quotation. Use single quotes, italics, or em-dashes instead. A single unescaped double quote makes the whole page unparseable and the page is lost.
+
 Return ONLY a JSON object:
 {
   "title": "...",
@@ -108,7 +114,7 @@ Return ONLY a JSON object:
   "faq": [{"q": "...", "a": "..."}],
   "related_slugs": ["..."],
   "meta_description": "...",
-  "claim_map": [{"claim": "the specific claim as written", "facet_ids": ["e12"]}]
+  "claim_map": [{"claim": "the specific claim as written", "facet_ids": ["e12", "stat:member_count"]}]
 }`;
 
 // ---------- load archive ----------
@@ -191,21 +197,29 @@ function runShield(page, blocklist) {
     related_slugs: (page.related_slugs || []).join(' '),
     claim_map: (page.claim_map || []).map((c) => c.claim).join(' ')
   };
-  const hits = shieldCheck(fields, blocklist);
+  // token pass OFF: the 409 archive names are full of common nouns.
+  // Stage 4's confidential vendor list keeps the stricter default.
+  const hits = shieldCheck(fields, blocklist, { tokenPass: false });
 
-  // shieldCheck flags a single distinctive token, which is right for the
-  // confidential Stage 4 list but noisy against 409 archive names full of
-  // common nouns ("Plates Restaurant & Bar" would flag any page saying
-  // "restaurant"). Separate the two so a real leak is not buried.
-  const exact = hits.filter((h) => h.match === 'exact_phrase');
+  const exact = hits.filter((h) => h.match === 'exact_phrase' || h.match === 'fuzzy_phrase');
   return { hits, exact };
 }
+
+// Aggregate counts come from payload statistics, not from any single facet, so
+// they are uncitable with facet ids alone. These reserved tokens make them
+// citable instead of forcing the model to invent an id.
+const STAT_TOKENS = new Set(['stat:member_count', 'stat:group_size_range']);
 
 function runClaimAudit(page, shortId, evidence) {
   const clusterFacetIds = new Set(evidence.map((f) => f.id));
   const issues = [];
   for (const c of page.claim_map || []) {
     for (const sid of c.facet_ids || []) {
+      if (STAT_TOKENS.has(sid)) continue;
+      if (String(sid).startsWith('stat:')) {
+        issues.push({ claim: c.claim, id: sid, problem: 'unknown stat token' });
+        continue;
+      }
       const real = shortId.get(sid);
       if (!real) { issues.push({ claim: c.claim, id: sid, problem: 'unknown facet id' }); continue; }
       if (!clusterFacetIds.has(real)) issues.push({ claim: c.claim, id: sid, problem: 'facet not in this cluster' });
@@ -260,7 +274,10 @@ async function generate(exp) {
   // short-id -> real uuid, so the browser can resolve claims to facets
   page._claim_resolved = (page.claim_map || []).map((c) => ({
     claim: c.claim,
-    facet_ids: (c.facet_ids || []).map((s) => shortId.get(s)).filter(Boolean)
+    facet_ids: (c.facet_ids || []).map((s) => shortId.get(s)).filter(Boolean),
+    // reserved stat tokens are kept verbatim so the browser can show what
+    // backs an aggregate count
+    stats: (c.facet_ids || []).filter((s) => String(s).startsWith('stat:'))
   }));
 
   console.log(`  ${page.body_md.split(/\s+/).length} words · shield ${page._gates.shield_status} · claims ${page._gates.claim_audit_status} (${(page.claim_map || []).length} mapped)`);
