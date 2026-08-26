@@ -12,3 +12,7 @@ vendor*.csv
 # stage 3a intermediate artifacts
 .stage3-cache/
 .stage3b-cache/
+
+# imported client review notes and their reports are client-confidential
+import-unmatched.md
+*.docx
