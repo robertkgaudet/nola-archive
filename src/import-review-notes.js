@@ -449,6 +449,46 @@ function splitByUnderline(note, para) {
   return out.length ? out : [note];
 }
 
+/**
+ * When a passage matches nothing verbatim, say why usefully.
+ *
+ * A passage whose words are all on one page but whose sentence is not has not
+ * gone missing — the page was reworded after the team read it. Telling Rob
+ * "not found" would send him hunting for a passage that is really a stale
+ * quote, so name the page it drifted from instead.
+ */
+function closestByWords(text, pages) {
+  const words = new Set(normalize(text).split(' ').filter((w) => w.length > 4));
+  if (words.size < 6) return null;
+  let best = { ratio: 0, slug: '' };
+  for (const page of pages) {
+    const have = new Set(normalize(`${page.direct_answer || ''} ${page.body_md || ''}`)
+      .split(' ').filter((w) => w.length > 4));
+    let hit = 0;
+    for (const w of words) if (have.has(w)) hit++;
+    const ratio = hit / words.size;
+    if (ratio > best.ratio) best = { ratio, slug: page.slug };
+  }
+  return best.ratio >= 0.9 ? best : null;
+}
+
+/** A plain-English reason a passage could not be placed. */
+function whyUnplaced(text, pages, placed) {
+  if (placed?.ambiguous) {
+    return `ambiguous — matched ${placed.page.slug} (${placed.matchLen}) and `
+      + `${placed.runnerUp.slug} (${placed.runnerUp.len}) too closely`;
+  }
+  const faq = faqHit(text, pages);
+  if (faq) return `passage is in the FAQ of ${faq.slug} — /review cannot anchor FAQ text`;
+  const near = closestByWords(text, pages);
+  if (near) {
+    return `wording no longer matches — every word is on ${near.slug} `
+      + `(${Math.round(near.ratio * 100)}%) but the sentence is not, so that page was `
+      + 'reworded after the team reviewed it';
+  }
+  return 'passage not found on any page';
+}
+
 function parseDocument(paras, pages) {
   const notes = [];
   const unmatched = [];
@@ -529,9 +569,7 @@ function parseDocument(paras, pages) {
       label,
       quote: text.slice(0, 200),
       note: placed ? cleanNote(placed.leftover) : '',
-      why: placed?.ambiguous
-        ? `ambiguous — matched ${placed.page.slug} (${placed.matchLen}) and ${placed.runnerUp.slug} (${placed.runnerUp.len}) too closely`
-        : (faqHit(text, pages) ? `passage is in the FAQ of ${faqHit(text, pages).slug} — /review cannot anchor FAQ text` : 'passage not found on any page'),
+      why: whyUnplaced(text, pages, placed),
       index: i
     });
   }
