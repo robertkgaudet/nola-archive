@@ -51,21 +51,24 @@ async function wp(path, { method = 'GET', body } = {}) {
     const code = json?.code || '(no code)';
     const msg = json?.message || text.slice(0, 200);
 
-    // The signature of a stripped Authorization header: WordPress reports
-    // "not logged in" rather than rejecting the credential. If the header were
-    // reaching PHP, a bad password would come back as `incorrect_password`.
+    // rest_not_logged_in means WordPress ended the request as an anonymous
+    // user. On this stack (nginx + PHP-FPM behind Cloudflare) the Authorization
+    // header is confirmed to reach PHP, so the usual cause is the credential
+    // itself, not transport.
     if (res.status === 401 && code === 'rest_not_logged_in') {
       throw new Error(
         `401 ${code}: ${msg}\n\n` +
-        `  WordPress did not see an Authorization header at all — this is a server\n` +
-        `  transport problem, not a wrong password. The origin is not passing\n` +
-        `  HTTP_AUTHORIZATION through to PHP (common on Apache/LiteSpeed + CGI/FastCGI).\n` +
-        `  Fix in the site's root .htaccess:\n\n` +
-        `    <IfModule mod_rewrite.c>\n` +
-        `    RewriteEngine On\n` +
-        `    RewriteCond %{HTTP:Authorization} ^(.*)\n` +
-        `    RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]\n` +
-        `    </IfModule>\n`
+        `  WordPress received the request as an anonymous user. The credential\n` +
+        `  is not being accepted. Check, in order:\n\n` +
+        `    1. WP_USER is the exact login of the user who owns the application\n` +
+        `       password (application passwords are per-user; the Basic username\n` +
+        `       must be that user's login, not a display name).\n` +
+        `    2. WP_APP_PASSWORD has not been revoked or regenerated in\n` +
+        `       wp-admin -> Users -> Profile -> Application Passwords. Regenerating\n` +
+        `       invalidates the previous value; paste the new one into .env.\n\n` +
+        `  (This is nginx + PHP-FPM behind Cloudflare — there is no .htaccess, and\n` +
+        `  the companion plugin's diagnostic endpoint confirms the header reaches\n` +
+        `  PHP, so a mod_rewrite fix does not apply here.)\n`
       );
     }
     throw new Error(`${res.status} ${code}: ${msg}`);
